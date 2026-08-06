@@ -1,0 +1,106 @@
+name: Update feed
+
+on:
+  schedule:
+    # Once a day, ~07:17 UTC. Once/day keeps us inside Apify's $5 free credits;
+    # see README before increasing this.
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # Site changes should redeploy; a README tweak should not.
+    paths-ignore: ['README.md', '.gitignore']
+
+permissions:
+  contents: write   # force-push the data branch
+  pages: write      # deploy
+  id-token: write   # Pages OIDC
+
+# Never let two runs deploy at once, but do not cancel a run in progress —
+# a cancelled fetch wastes Apify credits.
+concurrency:
+  group: techno-feed
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Checkout site source
+        uses: actions/checkout@v4
+
+      - name: Restore data store from the data branch
+        run: |
+          mkdir -p store
+          # The data branch is an orphan holding only feed.json + media/, kept at
+          # exactly one commit so mirrored images never accumulate in history.
+          if git fetch --depth=1 origin data 2>/dev/null; then
+            git --work-tree=store checkout FETCH_HEAD -- . 2>/dev/null || true
+            echo "Restored store: $(ls store | tr '\n' ' ')"
+          else
+            echo "No data branch yet — starting from an empty store."
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Fetch new posts
+        id: fetch
+        # Deliberately non-fatal: on failure the store is left untouched and we
+        # still redeploy the last good data, which the site marks as stale.
+        continue-on-error: true
+        env:
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          STORE_DIR: store
+        run: node scripts/fetch.mjs
+
+      - name: Publish data store to the data branch
+        if: steps.fetch.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd store
+          rm -rf .git
+          git init -q -b data
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "data: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Force-push an orphan: history stays at one commit forever, so the
+          # repo cannot bloat no matter how long this runs.
+          git push -q --force origin HEAD:data
+          echo "Pushed $(ls -1 media 2>/dev/null | wc -l) media files"
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html app.js style.css icon.svg manifest.webmanifest robots.txt _site/
+          # Ship the data inside the deployment: no cross-origin fetch, no CORS,
+          # no raw.githubusercontent caching surprises.
+          cp -r store/. _site/ 2>/dev/null || true
+          if [ ! -f _site/feed.json ]; then
+            echo "::warning::No feed.json — the site will render its setup message."
+          fi
+          du -sh _site
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Surface a failed fetch
+        if: steps.fetch.outcome == 'failure'
+        run: |
+          echo "::error::Fetch failed — the site was redeployed with the previous data."
+          echo "Common causes: monthly Apify credits exhausted (HTTP 402), a missing" \
+               "APIFY_TOKEN secret, or the actor being changed/delisted. See README."
+          exit 1

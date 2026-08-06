@@ -1,0 +1,11 @@
+{
+  "_comment": "Add the Instagram pages you want to follow. 'handle' is the username without the @. 'name' is the label shown on the site. Delete the placeholders below.",
+
+  "postsPerSource": 6,
+  "maxStoredPosts": 300,
+
+  "sources": [
+    { "handle": "hoerberlin", "name": "Hör Berlin" },
+    { "handle": "boilerroomtv", "name": "Boiler Room" }
+  ]
+}

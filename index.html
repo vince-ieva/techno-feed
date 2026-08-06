@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0a0a0b">
+<title>Techno Feed</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Techno<span class="accent">Feed</span></h1>
+    <button id="markAllRead" class="ghost-btn" type="button">Mark all read</button>
+  </div>
+  <p class="meta" id="updatedAt">Loading…</p>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<nav class="filters" aria-label="Filters">
+  <div class="chip-row" id="sourceChips" role="group" aria-label="Filter by source"></div>
+  <div class="toggle-row">
+    <label class="toggle">
+      <input type="checkbox" id="hidePromo">
+      <span>Hide promo</span>
+    </label>
+    <label class="toggle">
+      <input type="checkbox" id="unreadOnly">
+      <span>Unread only</span>
+    </label>
+    <span class="count" id="visibleCount"></span>
+  </div>
+</nav>
+
+<main id="feed" class="feed" aria-live="polite"></main>
+
+<p id="emptyState" class="empty" hidden></p>
+
+<footer class="footer">
+  <p>Read-only mirror of public Instagram posts, for personal use. No Meta login required.</p>
+</footer>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Techno Feed">
+  <rect width="512" height="512" fill="#0a0a0b"/>
+  <g fill="#c6ff3d">
+    <rect x="96"  y="236" width="32" height="40"  rx="8"/>
+    <rect x="152" y="196" width="32" height="120" rx="8"/>
+    <rect x="208" y="136" width="32" height="240" rx="8"/>
+    <rect x="264" y="176" width="32" height="160" rx="8"/>
+    <rect x="320" y="216" width="32" height="80"  rx="8"/>
+    <rect x="376" y="246" width="32" height="20"  rx="8"/>
+  </g>
+</svg>

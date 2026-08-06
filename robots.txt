@@ -1,0 +1,4 @@
+# This site mirrors thumbnails of other people's public Instagram posts for one
+# person's private reading. It should not be indexed or archived.
+User-agent: *
+Disallow: /
