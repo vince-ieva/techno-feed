@@ -94,18 +94,29 @@ Share → Add to Home Screen and it behaves like an app.
 
 ## Cost
 
-The actor is priced per query and per post, so cost scales with sources × cadence:
+Measured, not estimated — from real runs against the 7 configured clubs:
 
-| Setup | Per day | Per month | vs $5 free credits |
-|---|---|---|---|
-| 10 sources, 6 posts, 1×/day | $0.08 | **~$2.40** | comfortable |
-| 10 sources, 6 posts, 2×/day | $0.16 | ~$4.80 | at the ceiling |
-| 20 sources, 6 posts, 1×/day | $0.16 | ~$4.80 | at the ceiling |
+| | Charged events | Cost |
+|---|---|---|
+| Cold run, 7 sources × 6 posts (42 posts) | `post: 42`, `post-details: 0` | **$0.061** |
+| Same with `detailedData` | `post: 42`, `post-details: 42` | $0.174 |
 
-**Stay at one run per day** unless you are willing to pay. Credits do not roll over, and Apify
-simply blocks runs once they are spent — at which point the site keeps serving the last good
-data behind a staleness banner. To go faster, change the `cron` line in
-[`.github/workflows/update.yml`](.github/workflows/update.yml).
+At `basicData` and one run per day that is **~$1.84/month** worst case, against **$5/month** of
+free credits. In practice much less, because `onlyPostsNewerThan` means a normal day fetches only
+the handful of genuinely new posts rather than the whole backlog.
+
+Two settings drive this:
+
+- **`dataDetailLevel`** (default `basicData`). `detailedData` roughly triples the cost and its
+  only real benefit here is the `paidPartnership` flag — which club and promoter pages
+  essentially never set, since it is an influencer/brand-deal feature. Set
+  `"dataDetailLevel": "detailedData"` in `sources.json` if you ever want it.
+- **Cadence.** Billing is per post *returned*, not per *new* post, so without the incremental
+  watermark every run would pay for the full backlog again.
+
+Credits do not roll over, and Apify blocks runs once they are spent — at which point the site
+keeps serving the last good data behind a staleness banner. To change cadence, edit the `cron`
+line in [`.github/workflows/update.yml`](.github/workflows/update.yml).
 
 ---
 
@@ -117,32 +128,72 @@ Posts are scored 0–3 in [`scripts/promo.mjs`](scripts/promo.mjs) and shown wit
 | Score | Trigger |
 |---|---|
 | 3 | Instagram's own paid-partnership flag, or several weaker signals stacked |
-| 1–2 | Caption keywords: tickets, presale, link in bio, giveaway, discount, `#ad`, … |
+| 1–2 | Caption keywords: tickets, `tix`, presale, prices in €, booking fee, link in bio, giveaway, discount, `#ad`, … |
 | +1 | More than 12 hashtags |
+| **−2 each** | `NEWS_PATTERNS`: cancellation, postponement, refund, weather notice, obituary |
 
-Keywords are matched in English, Italian, German and Spanish, since techno pages are mostly
-European — `prevendite aperte` and `Vorverkauf` get caught, not just `presale`.
+Keywords are matched in English, **Spanish, Catalan**, Italian and German. The Spanish/Catalan
+set does most of the work for this feed — `entrades a la venda` and `prevenda oberta` get caught,
+not just `presale`.
 
-To tune it, edit `PROMO_PATTERNS` and run `node scripts/test-promo.mjs`. The whole backlog is
-re-scored on the next fetch, so changes apply retroactively rather than only to new posts.
+`NEWS_PATTERNS` exists because a cancellation notice necessarily talks about tickets and refunds,
+and it is exactly the post you most want to read. A real Onírica weather-cancellation post was
+being marked as promo until these were added. A platform paid-partnership flag is factual and is
+never talked down by them.
+
+### Tuning against real captions
+
+Scoring is pure and offline, so iterate for free — no actor call, no credits:
+
+```bash
+node scripts/rescore.mjs --audit   # every stored post with its score and reasons
+# edit PROMO_PATTERNS / NEWS_PATTERNS in scripts/promo.mjs
+node scripts/rescore.mjs --dry     # what would change, writes nothing
+node scripts/test-promo.mjs        # keep the regressions green
+node scripts/rescore.mjs           # apply to the stored feed
+```
+
+Two real misses this loop caught, both now regression-tested: Society of Art writes every ticket
+push as `LAST 100 tix at 19€+bfee` — which scored **0** until `tix`, `bfee` and euro prices were
+added — and the weather cancellation above.
+
+The whole backlog is re-scored on every fetch too, so changes apply retroactively.
 
 ---
 
 ## If it breaks
 
-**The most likely failure is the actor changing or being delisted.** All actor-specific field
-mapping lives in [`scripts/normalize.mjs`](scripts/normalize.mjs) — nothing else touches a raw
-field name, so swapping is a one-file change.
+**The most likely failure is the actor changing, being delisted, or paywalling the API.** All
+actor-specific field mapping lives in [`scripts/normalize.mjs`](scripts/normalize.mjs) — nothing
+else touches a raw field name, so swapping is a one-file change.
 
-Current actor: `apidojo~instagram-scraper` (input `startUrls` + `maxItems`; output `id`, `code`,
-`url`, `createdAt`, `caption`, `owner.username`, `image.url`, `isPaidPartnership`).
+Current actor: **`apify~instagram-post-scraper`** (input `username[]`, `resultsLimit`,
+`dataDetailLevel`, `onlyPostsNewerThan`; output `id`, `shortCode`, `url`, `type`, `timestamp`,
+`caption`, `displayUrl`, `ownerUsername`, `likesCount`, `coauthorProducers`).
+
+> **Do not switch to `apidojo~instagram-scraper`.** It was the original choice and it refuses API
+> access on the Free plan — *"The developer of this actor doesn't allow the use of API in the Free
+> Plan"* — which is fatal here, because GitHub Actions can only reach it by API. The run reports
+> `SUCCEEDED` and quietly returns `{"noResults": true}` for every input, so the failure is easy
+> to misread as a bug in this repo. Prefer Apify's own (`apify~…`) actors, which have no such
+> restriction.
 
 Drop-in alternates, and how they differ:
 
 | Actor | Differences to handle in `normalize.mjs` |
 |---|---|
-| `apify~instagram-scraper` | Input uses `directUrls` + `resultsLimit`. Output uses `timestamp` (not `createdAt`), `displayUrl` (not `image.url`), `ownerUsername` (flat, not `owner.username`), and provides a `hashtags` array. |
-| `netdesignr~instagram-posts-scraper-pro` | Output uses `publishedAt`, `media[]`, `ownerUsername`, and exposes **both** `isSponsored` and `isPaidPartnership`. |
+| `apify~instagram-scraper` | The general-purpose one. Input uses `directUrls` + `resultsType: 'posts'`. Output is close to the current actor's. |
+| `netdesignr~instagram-posts-scraper-pro` | Output uses `publishedAt`, `media[]`, and exposes **both** `isSponsored` and `isPaidPartnership`. Verify free-plan API access first. |
+
+### Two field quirks worth knowing
+
+- **`likesCount` is `-1`** when Instagram hides like counts (18 of 42 posts in a real run).
+  `normalize.mjs` maps negatives to `null` so the UI omits the count instead of showing
+  "-1 likes".
+- **Collab posts report another account as owner.** Instagram co-authored posts appear on a
+  configured club's grid but carry a different `ownerUsername`. Matching on owner alone silently
+  discarded **12 of 42 posts** in a real run. `normalize.mjs` falls back to `coauthorProducers`
+  and records the real poster in `coauthorOf`.
 
 Other failures:
 
@@ -166,14 +217,20 @@ No dependencies to install — everything uses built-in Node (v24) and plain bro
 node scripts/test-promo.mjs          # offline tests: scorer + actor adapter
 node scripts/make-fixture.mjs        # fake store, no token, no credits spent
 node scripts/make-fixture.mjs --stale  # backdated, to see the staleness banner
+node scripts/rescore.mjs --audit     # re-score the real store, free
 
 # preview exactly what gets deployed
 mkdir -p _site && cp index.html app.js style.css icon.svg manifest.webmanifest robots.txt _site/
-cp -r store/. _site/ && (cd _site && python3 -m http.server 8000)
+cp -r store/. _site/ && python3 -m http.server 8000 --directory _site
 
-# a real fetch (spends a few cents of credit)
-APIFY_TOKEN=... STORE_DIR=store node scripts/fetch.mjs
+# a real fetch (~6 cents for a cold run over 7 sources)
+echo 'APIFY_TOKEN=apify_api_...' > .env.local     # gitignored
+set -a && . ./.env.local && set +a
+STORE_DIR=store node scripts/fetch.mjs
 ```
+
+A local HTTP server is required — opening `index.html` over `file://` fails, because `app.js`
+fetches `feed.json` and browsers block that on the `file:` origin.
 
 `fetch.mjs` assembles everything in memory and only writes at the very end, so a failed run
 always leaves the previous store byte-identical.
@@ -187,6 +244,7 @@ always leaves the previous store byte-identical.
 | `scripts/normalize.mjs` | Actor adapter. All raw field names live here. |
 | `scripts/promo.mjs` | Promo scoring. Pure, no network. |
 | `scripts/test-promo.mjs` | Tests for the two above. |
+| `scripts/rescore.mjs` | Re-score the stored feed offline, for tuning keywords for free. |
 | `scripts/make-fixture.mjs` | Fake data for local UI work. |
 | `index.html` / `app.js` / `style.css` | The site. No framework, no build step. |
 | `.github/workflows/update.yml` | Cron, data branch, Pages deploy. |

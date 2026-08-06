@@ -16,7 +16,7 @@
 
 import { readFile, writeFile, mkdir, readdir, rm, rename } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { ACTOR_ID, buildInput, normalizeItem } from './normalize.mjs'
+import { ACTOR_ID, buildInput, normalizeItem, computeWatermark } from './normalize.mjs'
 import { scorePost } from './promo.mjs'
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN
@@ -47,19 +47,49 @@ async function main() {
   const maxStoredPosts = config.maxStoredPosts ?? 300
 
   const sourceLookup = new Map(sources.map((s) => [s.handle.toLowerCase(), s]))
-  log(`${sources.length} sources, ${postsPerSource} posts each (cap ${sources.length * postsPerSource} items)`)
+  log(`${sources.length} sources, ${postsPerSource} posts each`)
 
   const existing = await loadExistingFeed()
   log(`existing store: ${existing.posts.length} posts`)
 
+  // Billing is per post RETURNED, so without a watermark every run pays for the
+  // whole backlog again. Null on a cold start or when a source is new.
+  const watermark = computeWatermark(sources, existing.posts)
+  log(watermark ? `incremental: only posts newer than ${watermark}` : 'full fetch (no watermark yet)')
+
   // --- Network phase. Any throw here aborts before we touch the store. ---
-  const rawItems = await runActor(buildInput(sources, { postsPerSource }))
+  const input = buildInput(sources, {
+    postsPerSource,
+    dataDetailLevel: config.dataDetailLevel,
+    onlyPostsNewerThan: watermark,
+  })
+  const { items: rawItems, statusMessage } = await runActor(input)
   log(`actor returned ${rawItems.length} raw items`)
 
   const fetched = rawItems.map((r) => normalizeItem(r, sourceLookup)).filter(Boolean)
   log(`${fetched.length} usable after normalization`)
 
-  if (!fetched.length) fail('Actor returned no usable posts. Store left unchanged.')
+  // An empty result is ambiguous: genuinely nothing new (fine, on an
+  // incremental run) versus the actor refusing to work (not fine). Distinguish
+  // them, and surface the actor's own status message either way -- guessing
+  // wrong here once cost a lot of debugging.
+  if (!fetched.length) {
+    const detail = statusMessage ? ` Actor said: "${statusMessage}"` : ''
+    // `noResults` markers are how some actors report "found nothing at all".
+    const sawNoResultsMarker = rawItems.some((r) => r?.noResults)
+
+    if (watermark && !rawItems.length) {
+      log(`no new posts since the watermark -- nothing to do.${detail}`)
+      return // Not an error: this is the steady state on a quiet day.
+    }
+    fail(
+      `Actor returned no usable posts. Store left unchanged.${detail}` +
+        (sawNoResultsMarker
+          ? '\n  The actor reported noResults for every input. Check the handles in' +
+            ' sources.json, and whether this actor permits API access on your Apify plan.'
+          : ''),
+    )
+  }
 
   // --- Merge. Existing posts win, so already-mirrored images are not refetched. ---
   const byId = new Map(existing.posts.map((p) => [p.id, p]))
@@ -125,7 +155,10 @@ async function loadExistingFeed() {
   }
 }
 
-/** Start the actor, poll until it settles, return its dataset items. */
+/**
+ * Start the actor, poll until it settles, return its dataset items plus the
+ * actor's final status message (which is where actors explain refusals).
+ */
 async function runActor(input) {
   const start = await apify(`${API}/acts/${ACTOR_ID}/runs`, {
     method: 'POST',
@@ -140,19 +173,27 @@ async function runActor(input) {
 
   const deadline = Date.now() + RUN_TIMEOUT_MS
   let status = start.data.status
+  let run = start.data
   while (status === 'READY' || status === 'RUNNING') {
     if (Date.now() > deadline) throw new Error(`Run ${runId} still ${status} after ${RUN_TIMEOUT_MS / 1000}s.`)
     await sleep(POLL_INTERVAL_MS)
-    status = (await apify(`${API}/actor-runs/${runId}`))?.data?.status
+    run = (await apify(`${API}/actor-runs/${runId}`))?.data ?? run
+    status = run.status
     log(`  status: ${status}`)
   }
 
   if (status !== 'SUCCEEDED') {
-    throw new Error(`Run ${runId} finished as ${status}. Check https://console.apify.com/actors/runs/${runId}`)
+    throw new Error(
+      `Run ${runId} finished as ${status}. ${run.statusMessage ?? ''}` +
+        ` Check https://console.apify.com/actors/runs/${runId}`,
+    )
   }
 
+  if (run.usageTotalUsd != null) log(`run cost: $${run.usageTotalUsd.toFixed(4)}`)
+  if (run.chargedEventCounts) log(`charged events: ${JSON.stringify(run.chargedEventCounts)}`)
+
   const items = await apify(`${API}/datasets/${datasetId}/items?clean=true&format=json`)
-  return Array.isArray(items) ? items : []
+  return { items: Array.isArray(items) ? items : [], statusMessage: run.statusMessage ?? null }
 }
 
 async function apify(url, init = {}) {

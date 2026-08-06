@@ -5,7 +5,12 @@
   "maxStoredPosts": 300,
 
   "sources": [
-    { "handle": "hoerberlin", "name": "Hör Berlin" },
-    { "handle": "boilerroomtv", "name": "Boiler Room" }
+    { "handle": "thesocietyofart_bcn", "name": "Society of Art" },
+    { "handle": "seaseaclub.bcn", "name": "SeaSea club" },
+    { "handle": "nitsa_club", "name": "Nitsa" },
+    { "handle": "nacar.club", "name": "Nacar" },
+    { "handle": "inputdanceclub", "name": "Input" },
+    { "handle": "nom_barcelona", "name": "Nom" },
+    { "handle": "oniricabcn", "name": "Onirica" }
   ]
 }
